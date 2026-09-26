@@ -122,11 +122,12 @@ public abstract class BaseThemeSearchTask
 
         _logger.LogInformation("Ending theme search ({Count})", count);
 
-        if (configuration.CheckShokoRootThemeLinks)
+        if (configuration.MigrateLegacyShokoGroupThemes || configuration.CheckShokoRootThemeLinks)
         {
+            configuration.MigrateLegacyShokoGroupThemes = false;
             configuration.CheckShokoRootThemeLinks = false;
             Plugin.Instance!.SaveConfiguration();
-            _logger.LogInformation("Cleared Shoko Group root theme link check request after successful scan");
+            _logger.LogInformation("Cleared completed Shoko Group migration and root theme link check requests");
         }
     }
 
