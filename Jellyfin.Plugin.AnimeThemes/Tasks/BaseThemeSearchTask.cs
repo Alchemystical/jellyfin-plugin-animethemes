@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.AnimeThemes.Configuration;
+using Jellyfin.Plugin.AnimeThemes.Models;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
@@ -64,13 +65,17 @@ public abstract class BaseThemeSearchTask
             applicable);
         // @formatter:on
 
-        // Get the anime objects in chunks
-        var itemsWithAnime = await items
-            .Where(it => _downloader.ShouldUpdate(it, configuration))
-            .Chunk(ChunkSize)
-            .ToAsyncEnumerable()
-            .SelectMany((chunk) => _downloader.ResolveItems(chunk, configuration, cancellationToken))
-            .ToListAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        // Get the anime objects in chunks.
+        var itemsWithAnime = new List<ItemWithAnime>();
+        foreach (var chunk in items.Where(it => _downloader.ShouldUpdate(it, configuration)).Chunk(ChunkSize))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await foreach (var itemWithAnime in _downloader.ResolveItems(chunk, configuration, cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                itemsWithAnime.Add(itemWithAnime);
+            }
+        }
 
         var semaphore = new SemaphoreSlim(1, 1);
         int counter = 0;
