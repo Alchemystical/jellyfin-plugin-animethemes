@@ -198,6 +198,14 @@
                             </label>
                             <div class="fieldDescription">The scan considers the Series root and physical Seasons. It is disabled by default.</div>
                         </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="CheckShokoRootThemeLinks" name="CheckShokoRootThemeLinks" type="checkbox"
+                                       is="emby-checkbox"/>
+                                <span>Check root theme symlinks during the next scan</span>
+                            </label>
+                            <div class="fieldDescription">For PerSeason placement, recreates missing root links and removes stale plugin-created links. The checkbox clears after a successful scan.</div>
+                        </div>
                         <div class="selectContainer">
                             <label class="selectLabel" for="MatchedLegacyShokoThemeAction">Uniquely matched themes</label>
                             <select is="emby-select" id="MatchedLegacyShokoThemeAction" name="MatchedLegacyShokoThemeAction"
@@ -308,6 +316,7 @@
                     config.MigrateLegacyShokoGroupThemes = document.querySelector('#MigrateLegacyShokoGroupThemes').checked;
                     config.MatchedLegacyShokoThemeAction = document.querySelector('#MatchedLegacyShokoThemeAction').value;
                     config.UnmatchedLegacyShokoThemeAction = document.querySelector('#UnmatchedLegacyShokoThemeAction').value;
+                    config.CheckShokoRootThemeLinks = document.querySelector('#CheckShokoRootThemeLinks').checked;
                 }
             }
 
@@ -349,6 +358,8 @@
                     config.MatchedLegacyShokoThemeAction ?? 'Move';
                 document.querySelector('#UnmatchedLegacyShokoThemeAction').value =
                     config.UnmatchedLegacyShokoThemeAction ?? 'Delete';
+                document.querySelector('#CheckShokoRootThemeLinks').checked =
+                    config.CheckShokoRootThemeLinks ?? false;
             }
 
             document.querySelector('#AnimeThemesConfigPage')

@@ -147,7 +147,8 @@ public class AnimeThemesDownloader : IDisposable
                     && configuration.VideoSettings.FetchType != FetchType.None)
                 || (configuration.MigrateLegacyShokoGroupThemes
                     && (configuration.AudioSettings.FetchType != FetchType.None
-                        || configuration.VideoSettings.FetchType != FetchType.None)));
+                        || configuration.VideoSettings.FetchType != FetchType.None))
+                || configuration.CheckShokoRootThemeLinks);
     }
 
     /// <summary>
@@ -171,6 +172,7 @@ public class AnimeThemesDownloader : IDisposable
 
         bool videoChanged = false;
         bool audioChanged = false;
+        bool rootThemeLinksChanged = false;
         if (itemWithAnime.MediaType is null || itemWithAnime.MediaType == MediaType.Video)
         {
             videoChanged = await ProcessMediaType(
@@ -195,6 +197,19 @@ public class AnimeThemesDownloader : IDisposable
                 cancellationToken).ConfigureAwait(false);
         }
 
+        if (itemWithAnime.RootThemeLinkGroup is not null)
+        {
+            if (itemWithAnime.MediaType is null || itemWithAnime.MediaType == MediaType.Video)
+            {
+                rootThemeLinksChanged |= SynchronizeRootThemeLinks(itemWithAnime.RootThemeLinkGroup, [item], MediaType.Video);
+            }
+
+            if (itemWithAnime.MediaType is null || itemWithAnime.MediaType == MediaType.Audio)
+            {
+                rootThemeLinksChanged |= SynchronizeRootThemeLinks(itemWithAnime.RootThemeLinkGroup, [item], MediaType.Audio);
+            }
+        }
+
         if (videoChanged || audioChanged)
         {
             _logger.LogInformation("[{Id}] Saving metadata", item.Id);
@@ -203,6 +218,12 @@ public class AnimeThemesDownloader : IDisposable
         else
         {
             _logger.LogInformation("[{Id}] Finished without changes", item.Id);
+        }
+
+        if (rootThemeLinksChanged && itemWithAnime.RootThemeLinkGroup is not null)
+        {
+            _logger.LogInformation("[{Id}] Saving metadata after updating Shoko Group root theme links", itemWithAnime.RootThemeLinkGroup.Id);
+            await itemWithAnime.RootThemeLinkGroup.RefreshMetadata(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -243,6 +264,26 @@ public class AnimeThemesDownloader : IDisposable
         if (sources.Length == 0)
         {
             LogUnrecoverableShokoGroupSources(group, configuration);
+        }
+
+        if (configuration.CheckShokoRootThemeLinks)
+        {
+            bool rootThemeLinksChanged = false;
+            if (configuration.AudioShokoGroupPlacement == ShokoGroupPlacement.PerSeason)
+            {
+                rootThemeLinksChanged |= SynchronizeRootThemeLinks(group, sources.Select(source => (BaseItem)source.Season), MediaType.Audio);
+            }
+
+            if (configuration.VideoShokoGroupPlacement == ShokoGroupPlacement.PerSeason)
+            {
+                rootThemeLinksChanged |= SynchronizeRootThemeLinks(group, sources.Select(source => (BaseItem)source.Season), MediaType.Video);
+            }
+
+            if (rootThemeLinksChanged)
+            {
+                _logger.LogInformation("[{Id}] Saving metadata after checking Shoko Group root theme links", group.Id);
+                await group.RefreshMetadata(cancellationToken).ConfigureAwait(false);
+            }
         }
 
         var targets = ResolveShokoGroupMediaType(MediaType.Audio, group, sources, animeByAniDb, configuration, cancellationToken)
@@ -292,7 +333,7 @@ public class AnimeThemesDownloader : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 if (animeByAniDb.TryGetValue(source.AniDbId, out var seasonAnime) && seasonAnime.Length > 0)
                 {
-                    yield return new ItemWithAnime(source.Season, new ReadOnlyCollection<Anime>(seasonAnime), mediaType, true);
+                    yield return new ItemWithAnime(source.Season, new ReadOnlyCollection<Anime>(seasonAnime), mediaType, true, group);
                 }
             }
 
@@ -413,7 +454,7 @@ public class AnimeThemesDownloader : IDisposable
 
                 foreach (var path in Directory.GetFiles(directoryPath, pattern))
                 {
-                    if (desiredPaths.Contains(path) || retainedSourcePaths.Contains(path))
+                    if (RootThemeLinkProjection.IsProjectionPath(path) || desiredPaths.Contains(path) || retainedSourcePaths.Contains(path))
                     {
                         continue;
                     }
@@ -443,7 +484,35 @@ public class AnimeThemesDownloader : IDisposable
         return mediaType == MediaType.Audio ? ThemeMusicDirectory : ThemeVideoDirectory;
     }
 
+    private bool SynchronizeRootThemeLinks(BaseItem group, IEnumerable<BaseItem> sources, MediaType mediaType)
+    {
+        bool changed = false;
+        foreach (var source in sources)
+        {
+            var result = RootThemeLinkProjection.Synchronize(
+                group.ContainingFolderPath,
+                source.Id,
+                GetThemeSourcePaths(source, mediaType),
+                GetThemeDirectory(mediaType),
+                mediaType == MediaType.Audio ? ".mp3" : ".webm");
+            changed |= result.Changed;
+
+            foreach (var conflict in result.Conflicts)
+            {
+                _logger.LogWarning("[{Id}] Keeping root theme projection {Path} because it is not a symbolic link", group.Id, conflict);
+            }
+        }
+
+        return changed;
+    }
+
     private static IEnumerable<string> GetMigrationSourcePaths(BaseItem source, MediaType mediaType)
+    {
+        return GetThemeSourcePaths(source, mediaType)
+            .Where(path => !RootThemeLinkProjection.IsProjectionPath(path));
+    }
+
+    private static IEnumerable<string> GetThemeSourcePaths(BaseItem source, MediaType mediaType)
     {
         var directoryPath = Path.Combine(source.ContainingFolderPath, GetThemeDirectory(mediaType));
         var pattern = mediaType == MediaType.Audio ? "*.mp3" : "*.webm";

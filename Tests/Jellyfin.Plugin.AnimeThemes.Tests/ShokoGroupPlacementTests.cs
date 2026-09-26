@@ -29,6 +29,7 @@ public sealed class ShokoGroupPlacementTests
         Assert.False(configuration.MigrateLegacyShokoGroupThemes);
         Assert.Equal(MatchedLegacyThemeAction.Move, configuration.MatchedLegacyShokoThemeAction);
         Assert.Equal(UnmatchedLegacyThemeAction.Delete, configuration.UnmatchedLegacyShokoThemeAction);
+        Assert.False(configuration.CheckShokoRootThemeLinks);
     }
 
     [Fact]

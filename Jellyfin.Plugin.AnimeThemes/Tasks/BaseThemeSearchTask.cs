@@ -121,6 +121,13 @@ public abstract class BaseThemeSearchTask
             }).ConfigureAwait(false);
 
         _logger.LogInformation("Ending theme search ({Count})", count);
+
+        if (configuration.CheckShokoRootThemeLinks)
+        {
+            configuration.CheckShokoRootThemeLinks = false;
+            Plugin.Instance!.SaveConfiguration();
+            _logger.LogInformation("Cleared Shoko Group root theme link check request after successful scan");
+        }
     }
 
     private List<BaseItem> GetApplicableItems(PluginConfiguration configuration)
