@@ -34,7 +34,7 @@ Also make sure to enable theme music / videos in your display settings.
 | Ignore ED themes                        | Use this to control whether EDs are considered.                                                           |
 | Fetch type                              | Determines if you want all distinct themes, only the best match, or none at all.                          |
 | Shoko Group placement (audio/video)   | For Shoko Groups only. Legacy root AniDB keeps existing behavior; Per Season writes to each physical Season; Series Mix writes all recovered Season themes to the Series root. A group with no physical Season AniDB IDs (for example, an unrecoverable Season Merging layout) is skipped and logged. |
-| Legacy Shoko Group migration            | Disabled by default. When enabled with non-legacy placement, each scan can move a uniquely matched root theme or delete it and download again. Unmatched or ambiguous root files default to delete; keeping them is configurable. |
+| Shoko Group placement migration         | Disabled by default. On a placement change — Legacy, Per Season, or Series Mix — scans the Series root and physical Seasons. A uniquely matched file can move as-is or be deleted and re-downloaded. Unmatched or ambiguous files default to delete; keeping them is configurable. |
 | Volume                                  | The desired volume, which will be baked in. For videos, 0 will result in the audio channel being removed. |
 
 ## Other notes

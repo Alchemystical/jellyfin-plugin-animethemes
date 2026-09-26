@@ -144,7 +144,10 @@ public class AnimeThemesDownloader : IDisposable
             && ((configuration.AudioShokoGroupPlacement != ShokoGroupPlacement.LegacyRootAniDb
                     && configuration.AudioSettings.FetchType != FetchType.None)
                 || (configuration.VideoShokoGroupPlacement != ShokoGroupPlacement.LegacyRootAniDb
-                    && configuration.VideoSettings.FetchType != FetchType.None));
+                    && configuration.VideoSettings.FetchType != FetchType.None)
+                || (configuration.MigrateLegacyShokoGroupThemes
+                    && (configuration.AudioSettings.FetchType != FetchType.None
+                        || configuration.VideoSettings.FetchType != FetchType.None)));
     }
 
     /// <summary>
@@ -248,7 +251,7 @@ public class AnimeThemesDownloader : IDisposable
 
         if (configuration.MigrateLegacyShokoGroupThemes)
         {
-            await MigrateLegacyThemes(group, targets, configuration, cancellationToken).ConfigureAwait(false);
+            await MigrateLegacyThemes(group, sources, targets, configuration, cancellationToken).ConfigureAwait(false);
         }
 
         foreach (var target in targets)
@@ -315,92 +318,112 @@ public class AnimeThemesDownloader : IDisposable
 
     private async ValueTask MigrateLegacyThemes(
         BaseItem group,
+        IReadOnlyCollection<GroupSource> sources,
         IReadOnlyCollection<ItemWithAnime> targets,
         PluginConfiguration configuration,
         CancellationToken cancellationToken)
     {
-        var candidates = targets
-            .Where(target => target.MediaType is not null && target.UseSourceUniqueFileNames)
+        var sourceItems = new[] { group }
+            .Concat(sources.Select(source => (BaseItem)source.Season))
+            .GroupBy(item => item.Id)
+            .Select(items => items.First())
+            .ToArray();
+        var migrationTargets = targets.Where(target => target.MediaType is not null).ToArray();
+        if (migrationTargets.Length == 0)
+        {
+            _logger.LogInformation("[{Id}] Skipping Shoko Group theme placement migration because no resolved target is available", group.Id);
+            return;
+        }
+
+        var targetLinks = migrationTargets
             .SelectMany(target => GetThemeLinks(
                     target.MediaType!.Value,
                     target.Anime,
                     target.MediaType == MediaType.Audio ? configuration.AudioSettings : configuration.VideoSettings,
-                    true)
-                .Select(link => new LegacyThemeCandidate(target, link)))
+                    target.UseSourceUniqueFileNames)
+                .Select(link => new PlacementMigrationTarget(target, link)))
             .ToArray();
-        if (candidates.Length == 0)
-        {
-            _logger.LogInformation("[{Id}] Skipping legacy Shoko Group theme migration because no resolved non-legacy target is available", group.Id);
-            return;
-        }
+        var desiredPaths = targetLinks
+            .Select(target => Path.Combine(target.Target.Item.ContainingFolderPath, target.Link.Filepath))
+            .ToHashSet(StringComparer.Ordinal);
+        var candidates = targetLinks
+            .SelectMany(target => sourceItems.SelectMany(source => new[]
+            {
+                Path.Combine(source.ContainingFolderPath, GetThemeDirectory(target.Target.MediaType!.Value), Path.GetFileName(target.Link.Filepath)),
+                Path.Combine(source.ContainingFolderPath, GetThemeDirectory(target.Target.MediaType!.Value), target.Link.LegacyFilename),
+            }
+                .Distinct(StringComparer.Ordinal)
+                .Select(path => new PlacementMigrationCandidate(source, target.Target, target.Link, path))))
+            .Where(candidate => !string.Equals(candidate.SourcePath, Path.Combine(candidate.Target.Item.ContainingFolderPath, candidate.Link.Filepath), StringComparison.Ordinal))
+            .DistinctBy(candidate => (candidate.SourcePath, candidate.Target.Item.Id, candidate.Link.Filepath))
+            .ToArray();
 
         var retainedSourcePaths = new HashSet<string>(StringComparer.Ordinal);
         var affectedItems = new HashSet<BaseItem>();
-        foreach (var candidatesBySource in candidates.GroupBy(candidate => GetLegacySourcePath(group, candidate.Target.MediaType!.Value, candidate.Link.LegacyFilename), StringComparer.Ordinal))
+        foreach (var candidatesBySource in candidates.GroupBy(candidate => candidate.SourcePath, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (candidatesBySource.Count() != 1)
             {
-                _logger.LogWarning(
-                    "[{Id}] Legacy Shoko Group theme {Path} matches multiple targets and is treated as unmatched",
-                    group.Id,
-                    candidatesBySource.Key);
+                _logger.LogWarning("[{Id}] Shoko Group theme {Path} matches multiple placement targets and is treated as unmatched", group.Id, candidatesBySource.Key);
                 continue;
             }
 
             var candidate = candidatesBySource.First();
-            if (!File.Exists(candidatesBySource.Key))
+            if (!File.Exists(candidate.SourcePath))
             {
                 continue;
             }
 
             if (configuration.MatchedLegacyShokoThemeAction == MatchedLegacyThemeAction.DeleteAndRedownload)
             {
-                File.Delete(candidatesBySource.Key);
-                affectedItems.Add(group);
-                _logger.LogInformation("[{Id}] Removed matched legacy theme {Path}; it will be downloaded again", group.Id, candidatesBySource.Key);
+                File.Delete(candidate.SourcePath);
+                affectedItems.Add(candidate.Source);
+                _logger.LogInformation("[{Id}] Removed matched Shoko Group theme {Path}; it will be downloaded again", group.Id, candidate.SourcePath);
                 continue;
             }
 
             var destinationPath = Path.Combine(candidate.Target.Item.ContainingFolderPath, candidate.Link.Filepath);
-            if (TryMoveLegacyTheme(candidatesBySource.Key, destinationPath, group.Id))
+            if (TryMoveLegacyTheme(candidate.SourcePath, destinationPath, group.Id))
             {
-                affectedItems.Add(group);
+                affectedItems.Add(candidate.Source);
                 affectedItems.Add(candidate.Target.Item);
             }
             else
             {
-                retainedSourcePaths.Add(candidatesBySource.Key);
+                retainedSourcePaths.Add(candidate.SourcePath);
             }
         }
 
-        foreach (var mediaType in candidates.Select(candidate => candidate.Target.MediaType!.Value).Distinct())
+        foreach (var source in sourceItems)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var directory = mediaType == MediaType.Audio ? ThemeMusicDirectory : ThemeVideoDirectory;
-            var pattern = mediaType == MediaType.Audio ? "*.mp3" : "*.webm";
-            var directoryPath = Path.Combine(group.ContainingFolderPath, directory);
-            if (!Directory.Exists(directoryPath))
+            foreach (var mediaType in migrationTargets.Select(target => target.MediaType!.Value).Distinct())
             {
-                continue;
-            }
-
-            foreach (var path in Directory.GetFiles(directoryPath, pattern))
-            {
-                if (retainedSourcePaths.Contains(path))
+                cancellationToken.ThrowIfCancellationRequested();
+                var directoryPath = Path.Combine(source.ContainingFolderPath, GetThemeDirectory(mediaType));
+                var pattern = mediaType == MediaType.Audio ? "*.mp3" : "*.webm";
+                if (!Directory.Exists(directoryPath))
                 {
                     continue;
                 }
 
-                if (configuration.UnmatchedLegacyShokoThemeAction == UnmatchedLegacyThemeAction.Delete)
+                foreach (var path in Directory.GetFiles(directoryPath, pattern))
                 {
-                    File.Delete(path);
-                    affectedItems.Add(group);
-                    _logger.LogInformation("[{Id}] Removed unmatched legacy theme {Path}", group.Id, path);
-                }
-                else
-                {
-                    _logger.LogInformation("[{Id}] Kept unmatched legacy theme {Path}", group.Id, path);
+                    if (desiredPaths.Contains(path) || retainedSourcePaths.Contains(path))
+                    {
+                        continue;
+                    }
+
+                    if (configuration.UnmatchedLegacyShokoThemeAction == UnmatchedLegacyThemeAction.Delete)
+                    {
+                        File.Delete(path);
+                        affectedItems.Add(source);
+                        _logger.LogInformation("[{Id}] Removed unmatched Shoko Group theme {Path}", group.Id, path);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("[{Id}] Kept unmatched Shoko Group theme {Path}", group.Id, path);
+                    }
                 }
             }
         }
@@ -411,17 +434,16 @@ public class AnimeThemesDownloader : IDisposable
         }
     }
 
-    private static string GetLegacySourcePath(BaseItem group, MediaType mediaType, string filename)
+    private static string GetThemeDirectory(MediaType mediaType)
     {
-        var directory = mediaType == MediaType.Audio ? ThemeMusicDirectory : ThemeVideoDirectory;
-        return Path.Combine(group.ContainingFolderPath, directory, filename);
+        return mediaType == MediaType.Audio ? ThemeMusicDirectory : ThemeVideoDirectory;
     }
 
     private bool TryMoveLegacyTheme(string sourcePath, string destinationPath, Guid groupId)
     {
         if (File.Exists(destinationPath))
         {
-            _logger.LogWarning("[{Id}] Keeping legacy theme {Path} because destination {Destination} already exists", groupId, sourcePath, destinationPath);
+            _logger.LogWarning("[{Id}] Keeping Shoko Group theme {Path} because destination {Destination} already exists", groupId, sourcePath, destinationPath);
             return false;
         }
 
@@ -429,7 +451,7 @@ public class AnimeThemesDownloader : IDisposable
         try
         {
             File.Move(sourcePath, destinationPath);
-            _logger.LogInformation("[{Id}] Migrated legacy theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
+            _logger.LogInformation("[{Id}] Migrated Shoko Group theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
             return true;
         }
         catch (IOException)
@@ -438,12 +460,12 @@ public class AnimeThemesDownloader : IDisposable
             {
                 File.Copy(sourcePath, destinationPath, false);
                 File.Delete(sourcePath);
-                _logger.LogInformation("[{Id}] Copied and removed legacy theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
+                _logger.LogInformation("[{Id}] Copied and removed Shoko Group theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
                 return true;
             }
             catch (IOException exception)
             {
-                _logger.LogWarning(exception, "[{Id}] Could not migrate legacy theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
+                _logger.LogWarning(exception, "[{Id}] Could not migrate Shoko Group theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
                 return false;
             }
         }
@@ -822,5 +844,7 @@ public class AnimeThemesDownloader : IDisposable
 
     private sealed record ThemeLink(string Url, string Filepath, string LegacyFilename);
 
-    private sealed record LegacyThemeCandidate(ItemWithAnime Target, ThemeLink Link);
+    private sealed record PlacementMigrationTarget(ItemWithAnime Target, ThemeLink Link);
+
+    private sealed record PlacementMigrationCandidate(BaseItem Source, ItemWithAnime Target, ThemeLink Link, string SourcePath);
 }

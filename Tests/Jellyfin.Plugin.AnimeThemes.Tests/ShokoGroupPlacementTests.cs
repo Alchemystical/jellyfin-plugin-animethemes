@@ -32,6 +32,18 @@ public sealed class ShokoGroupPlacementTests
     }
 
     [Fact]
+    public void MigrationEnablesShokoResolutionForLegacyPlacement()
+    {
+        using var downloader = CreateDownloader();
+        var configuration = new PluginConfiguration
+        {
+            MigrateLegacyShokoGroupThemes = true,
+        };
+
+        Assert.True(downloader.RequiresShokoGroupProcessing(CreateShokoGroup(), configuration));
+    }
+
+    [Fact]
     public void LegacyPlacementDoesNotEnableShokoMemberProcessing()
     {
         using var downloader = CreateDownloader();

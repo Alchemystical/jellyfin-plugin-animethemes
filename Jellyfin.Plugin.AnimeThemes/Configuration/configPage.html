@@ -189,17 +189,17 @@
                         </div>
                     </div>
                     <div class="verticalSection at-shoko-group-placement">
-                        <h2>Legacy Shoko Group Theme Migration</h2>
+                        <h2>Shoko Group Theme Placement Migration</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label">
                                 <input id="MigrateLegacyShokoGroupThemes" name="MigrateLegacyShokoGroupThemes" type="checkbox"
                                        is="emby-checkbox"/>
-                                <span>Migrate legacy root themes on the next scan</span>
+                                <span>Migrate themes after changing Shoko Group placement</span>
                             </label>
-                            <div class="fieldDescription">Only non-legacy Shoko Group placement is affected. The scan maps files by the current AnimeThemes output name.</div>
+                            <div class="fieldDescription">The scan considers the Series root and physical Seasons. It is disabled by default.</div>
                         </div>
                         <div class="selectContainer">
-                            <label class="selectLabel" for="MatchedLegacyShokoThemeAction">Matched root themes</label>
+                            <label class="selectLabel" for="MatchedLegacyShokoThemeAction">Uniquely matched themes</label>
                             <select is="emby-select" id="MatchedLegacyShokoThemeAction" name="MatchedLegacyShokoThemeAction"
                                     class="emby-select-withcolor emby-select">
                                 <option value="Move">Move without downloading</option>
@@ -207,13 +207,13 @@
                             </select>
                         </div>
                         <div class="selectContainer">
-                            <label class="selectLabel" for="UnmatchedLegacyShokoThemeAction">Unmatched or ambiguous root themes</label>
+                            <label class="selectLabel" for="UnmatchedLegacyShokoThemeAction">Unmatched or ambiguous themes</label>
                             <select is="emby-select" id="UnmatchedLegacyShokoThemeAction" name="UnmatchedLegacyShokoThemeAction"
                                     class="emby-select-withcolor emby-select">
                                 <option value="Delete">Delete</option>
-                                <option value="Keep">Keep at Series root</option>
+                                <option value="Keep">Keep where they are</option>
                             </select>
-                            <div class="fieldDescription">Delete is the default. Migration is disabled by default and logs every moved, redownloaded, retained, or removed file.</div>
+                            <div class="fieldDescription">Delete is the default. The scan logs every move, redownload, retention, and deletion.</div>
                         </div>
                     </div>
                 </fieldset>
