@@ -346,13 +346,17 @@ public class AnimeThemesDownloader : IDisposable
         var desiredPaths = targetLinks
             .Select(target => Path.Combine(target.Target.Item.ContainingFolderPath, target.Link.Filepath))
             .ToHashSet(StringComparer.Ordinal);
+        var targetCountsByMediaType = targetLinks
+            .GroupBy(target => target.Target.MediaType!.Value)
+            .ToDictionary(targetsByMediaType => targetsByMediaType.Key, targetsByMediaType => targetsByMediaType.Count());
         var candidates = targetLinks
-            .SelectMany(target => sourceItems.SelectMany(source => new[]
-            {
-                Path.Combine(source.ContainingFolderPath, GetThemeDirectory(target.Target.MediaType!.Value), Path.GetFileName(target.Link.Filepath)),
-                Path.Combine(source.ContainingFolderPath, GetThemeDirectory(target.Target.MediaType!.Value), target.Link.LegacyFilename),
-            }
-                .Distinct(StringComparer.Ordinal)
+            .SelectMany(target => sourceItems.SelectMany(source => GetMigrationSourcePaths(source, target.Target.MediaType!.Value)
+                .Where(path => ThemeFilenameMatcher.Matches(
+                    path,
+                    target.Link.SourceFilename,
+                    target.Link.ThemeSlug,
+                    target.Link.Extension,
+                    targetCountsByMediaType[target.Target.MediaType!.Value] == 1))
                 .Select(path => new PlacementMigrationCandidate(source, target.Target, target.Link, path))))
             .Where(candidate => !string.Equals(candidate.SourcePath, Path.Combine(candidate.Target.Item.ContainingFolderPath, candidate.Link.Filepath), StringComparison.Ordinal))
             .DistinctBy(candidate => (candidate.SourcePath, candidate.Target.Item.Id, candidate.Link.Filepath))
@@ -437,6 +441,24 @@ public class AnimeThemesDownloader : IDisposable
     private static string GetThemeDirectory(MediaType mediaType)
     {
         return mediaType == MediaType.Audio ? ThemeMusicDirectory : ThemeVideoDirectory;
+    }
+
+    private static IEnumerable<string> GetMigrationSourcePaths(BaseItem source, MediaType mediaType)
+    {
+        var directoryPath = Path.Combine(source.ContainingFolderPath, GetThemeDirectory(mediaType));
+        var pattern = mediaType == MediaType.Audio ? "*.mp3" : "*.webm";
+        if (Directory.Exists(directoryPath))
+        {
+            foreach (var path in Directory.GetFiles(directoryPath, pattern))
+            {
+                yield return path;
+            }
+        }
+
+        if (mediaType == MediaType.Audio)
+        {
+            yield return Path.Combine(source.ContainingFolderPath, ThemeMusicFileName);
+        }
     }
 
     private bool TryMoveLegacyTheme(string sourcePath, string destinationPath, Guid groupId)
@@ -591,7 +613,7 @@ public class AnimeThemesDownloader : IDisposable
             var legacyFilename = $"{sourceFilename}__{settings.Volume * 100:0}{extension}";
             var filepath = Path.Combine(directory, $"{filename}__{settings.Volume * 100:0}{extension}");
 
-            yield return new ThemeLink(url, filepath, legacyFilename);
+            yield return new ThemeLink(url, filepath, sourceFilename, source.Theme.Theme.Slug, extension);
         }
     }
 
@@ -842,7 +864,7 @@ public class AnimeThemesDownloader : IDisposable
 
     private sealed record SourcedTheme(Anime Anime, FlattenedTheme Theme);
 
-    private sealed record ThemeLink(string Url, string Filepath, string LegacyFilename);
+    private sealed record ThemeLink(string Url, string Filepath, string SourceFilename, string? ThemeSlug, string Extension);
 
     private sealed record PlacementMigrationTarget(ItemWithAnime Target, ThemeLink Link);
 
