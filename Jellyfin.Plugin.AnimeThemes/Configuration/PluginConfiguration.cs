@@ -39,6 +39,9 @@ public class PluginConfiguration : BasePluginConfiguration
         };
         AudioShokoGroupPlacement = ShokoGroupPlacement.LegacyRootAniDb;
         VideoShokoGroupPlacement = ShokoGroupPlacement.LegacyRootAniDb;
+        MigrateLegacyShokoGroupThemes = false;
+        MatchedLegacyShokoThemeAction = MatchedLegacyThemeAction.Move;
+        UnmatchedLegacyShokoThemeAction = UnmatchedLegacyThemeAction.Delete;
 
         MovieSettings = new CollectionTypeConfiguration();
     }
@@ -82,6 +85,21 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets where Shoko Group video themes are written.
     /// </summary>
     public ShokoGroupPlacement VideoShokoGroupPlacement { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether unambiguous plugin-generated Shoko Group themes are moved from the Series root to their configured non-legacy target.
+    /// </summary>
+    public bool MigrateLegacyShokoGroupThemes { get; set; }
+
+    /// <summary>
+    /// Gets or sets how a legacy root theme with one resolved target is migrated.
+    /// </summary>
+    public MatchedLegacyThemeAction MatchedLegacyShokoThemeAction { get; set; }
+
+    /// <summary>
+    /// Gets or sets how an unmatched or ambiguous legacy root theme is handled during migration.
+    /// </summary>
+    public UnmatchedLegacyThemeAction UnmatchedLegacyShokoThemeAction { get; set; }
 
     /// <summary>
     /// Gets or sets the download settings for the movie type.

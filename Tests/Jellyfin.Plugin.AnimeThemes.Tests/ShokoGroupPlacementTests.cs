@@ -22,6 +22,16 @@ public sealed class ShokoGroupPlacementTests
     }
 
     [Fact]
+    public void MigrationDefaultsToDisabledWithExplicitFileActions()
+    {
+        var configuration = new PluginConfiguration();
+
+        Assert.False(configuration.MigrateLegacyShokoGroupThemes);
+        Assert.Equal(MatchedLegacyThemeAction.Move, configuration.MatchedLegacyShokoThemeAction);
+        Assert.Equal(UnmatchedLegacyThemeAction.Delete, configuration.UnmatchedLegacyShokoThemeAction);
+    }
+
+    [Fact]
     public void LegacyPlacementDoesNotEnableShokoMemberProcessing()
     {
         using var downloader = CreateDownloader();

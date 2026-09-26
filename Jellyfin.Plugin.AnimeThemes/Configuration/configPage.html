@@ -188,6 +188,34 @@
                             </div>
                         </div>
                     </div>
+                    <div class="verticalSection at-shoko-group-placement">
+                        <h2>Legacy Shoko Group Theme Migration</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="MigrateLegacyShokoGroupThemes" name="MigrateLegacyShokoGroupThemes" type="checkbox"
+                                       is="emby-checkbox"/>
+                                <span>Migrate legacy root themes on the next scan</span>
+                            </label>
+                            <div class="fieldDescription">Only non-legacy Shoko Group placement is affected. The scan maps files by the current AnimeThemes output name.</div>
+                        </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="MatchedLegacyShokoThemeAction">Matched root themes</label>
+                            <select is="emby-select" id="MatchedLegacyShokoThemeAction" name="MatchedLegacyShokoThemeAction"
+                                    class="emby-select-withcolor emby-select">
+                                <option value="Move">Move without downloading</option>
+                                <option value="DeleteAndRedownload">Delete and download again</option>
+                            </select>
+                        </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="UnmatchedLegacyShokoThemeAction">Unmatched or ambiguous root themes</label>
+                            <select is="emby-select" id="UnmatchedLegacyShokoThemeAction" name="UnmatchedLegacyShokoThemeAction"
+                                    class="emby-select-withcolor emby-select">
+                                <option value="Delete">Delete</option>
+                                <option value="Keep">Keep at Series root</option>
+                            </select>
+                            <div class="fieldDescription">Delete is the default. Migration is disabled by default and logs every moved, redownloaded, retained, or removed file.</div>
+                        </div>
+                    </div>
                 </fieldset>
 
                 <div>
@@ -277,6 +305,9 @@
                 if (seriesTitle.matches(".selected")) {
                     config.AudioShokoGroupPlacement = document.querySelector('#AudioShokoGroupPlacement').value;
                     config.VideoShokoGroupPlacement = document.querySelector('#VideoShokoGroupPlacement').value;
+                    config.MigrateLegacyShokoGroupThemes = document.querySelector('#MigrateLegacyShokoGroupThemes').checked;
+                    config.MatchedLegacyShokoThemeAction = document.querySelector('#MatchedLegacyShokoThemeAction').value;
+                    config.UnmatchedLegacyShokoThemeAction = document.querySelector('#UnmatchedLegacyShokoThemeAction').value;
                 }
             }
 
@@ -312,6 +343,12 @@
                     config.AudioShokoGroupPlacement ?? 'LegacyRootAniDb';
                 document.querySelector('#VideoShokoGroupPlacement').value =
                     config.VideoShokoGroupPlacement ?? 'LegacyRootAniDb';
+                document.querySelector('#MigrateLegacyShokoGroupThemes').checked =
+                    config.MigrateLegacyShokoGroupThemes ?? false;
+                document.querySelector('#MatchedLegacyShokoThemeAction').value =
+                    config.MatchedLegacyShokoThemeAction ?? 'Move';
+                document.querySelector('#UnmatchedLegacyShokoThemeAction').value =
+                    config.UnmatchedLegacyShokoThemeAction ?? 'Delete';
             }
 
             document.querySelector('#AnimeThemesConfigPage')

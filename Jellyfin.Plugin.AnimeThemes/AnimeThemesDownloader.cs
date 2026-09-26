@@ -112,7 +112,7 @@ public class AnimeThemesDownloader : IDisposable
 
             if (IsShokoGroup(item) && RequiresShokoGroupProcessing(item, configuration))
             {
-                foreach (var target in ResolveShokoGroup(item, seasonsBySeries[item.Id], animeByAniDb, configuration, cancellationToken))
+                await foreach (var target in ResolveShokoGroup(item, seasonsBySeries[item.Id], animeByAniDb, configuration, cancellationToken).ConfigureAwait(false))
                 {
                     yield return target;
                 }
@@ -219,12 +219,12 @@ public class AnimeThemesDownloader : IDisposable
         return animeByAniDb;
     }
 
-    private IEnumerable<ItemWithAnime> ResolveShokoGroup(
+    private async IAsyncEnumerable<ItemWithAnime> ResolveShokoGroup(
         BaseItem group,
         IEnumerable<Season> seasons,
         IReadOnlyDictionary<int, Anime[]> animeByAniDb,
         PluginConfiguration configuration,
-        CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var sources = seasons
             .Where(season => !season.IsVirtualItem)
@@ -242,13 +242,16 @@ public class AnimeThemesDownloader : IDisposable
             LogUnrecoverableShokoGroupSources(group, configuration);
         }
 
-        foreach (var target in ResolveShokoGroupMediaType(MediaType.Audio, group, sources, animeByAniDb, configuration, cancellationToken))
+        var targets = ResolveShokoGroupMediaType(MediaType.Audio, group, sources, animeByAniDb, configuration, cancellationToken)
+            .Concat(ResolveShokoGroupMediaType(MediaType.Video, group, sources, animeByAniDb, configuration, cancellationToken))
+            .ToArray();
+
+        if (configuration.MigrateLegacyShokoGroupThemes)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            yield return target;
+            await MigrateLegacyThemes(group, targets, configuration, cancellationToken).ConfigureAwait(false);
         }
 
-        foreach (var target in ResolveShokoGroupMediaType(MediaType.Video, group, sources, animeByAniDb, configuration, cancellationToken))
+        foreach (var target in targets)
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return target;
@@ -310,6 +313,142 @@ public class AnimeThemesDownloader : IDisposable
         throw new ArgumentOutOfRangeException(nameof(configuration), placement, "Unknown Shoko Group placement.");
     }
 
+    private async ValueTask MigrateLegacyThemes(
+        BaseItem group,
+        IReadOnlyCollection<ItemWithAnime> targets,
+        PluginConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var candidates = targets
+            .Where(target => target.MediaType is not null && target.UseSourceUniqueFileNames)
+            .SelectMany(target => GetThemeLinks(
+                    target.MediaType!.Value,
+                    target.Anime,
+                    target.MediaType == MediaType.Audio ? configuration.AudioSettings : configuration.VideoSettings,
+                    true)
+                .Select(link => new LegacyThemeCandidate(target, link)))
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            _logger.LogInformation("[{Id}] Skipping legacy Shoko Group theme migration because no resolved non-legacy target is available", group.Id);
+            return;
+        }
+
+        var retainedSourcePaths = new HashSet<string>(StringComparer.Ordinal);
+        var affectedItems = new HashSet<BaseItem>();
+        foreach (var candidatesBySource in candidates.GroupBy(candidate => GetLegacySourcePath(group, candidate.Target.MediaType!.Value, candidate.Link.LegacyFilename), StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (candidatesBySource.Count() != 1)
+            {
+                _logger.LogWarning(
+                    "[{Id}] Legacy Shoko Group theme {Path} matches multiple targets and is treated as unmatched",
+                    group.Id,
+                    candidatesBySource.Key);
+                continue;
+            }
+
+            var candidate = candidatesBySource.First();
+            if (!File.Exists(candidatesBySource.Key))
+            {
+                continue;
+            }
+
+            if (configuration.MatchedLegacyShokoThemeAction == MatchedLegacyThemeAction.DeleteAndRedownload)
+            {
+                File.Delete(candidatesBySource.Key);
+                affectedItems.Add(group);
+                _logger.LogInformation("[{Id}] Removed matched legacy theme {Path}; it will be downloaded again", group.Id, candidatesBySource.Key);
+                continue;
+            }
+
+            var destinationPath = Path.Combine(candidate.Target.Item.ContainingFolderPath, candidate.Link.Filepath);
+            if (TryMoveLegacyTheme(candidatesBySource.Key, destinationPath, group.Id))
+            {
+                affectedItems.Add(group);
+                affectedItems.Add(candidate.Target.Item);
+            }
+            else
+            {
+                retainedSourcePaths.Add(candidatesBySource.Key);
+            }
+        }
+
+        foreach (var mediaType in candidates.Select(candidate => candidate.Target.MediaType!.Value).Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var directory = mediaType == MediaType.Audio ? ThemeMusicDirectory : ThemeVideoDirectory;
+            var pattern = mediaType == MediaType.Audio ? "*.mp3" : "*.webm";
+            var directoryPath = Path.Combine(group.ContainingFolderPath, directory);
+            if (!Directory.Exists(directoryPath))
+            {
+                continue;
+            }
+
+            foreach (var path in Directory.GetFiles(directoryPath, pattern))
+            {
+                if (retainedSourcePaths.Contains(path))
+                {
+                    continue;
+                }
+
+                if (configuration.UnmatchedLegacyShokoThemeAction == UnmatchedLegacyThemeAction.Delete)
+                {
+                    File.Delete(path);
+                    affectedItems.Add(group);
+                    _logger.LogInformation("[{Id}] Removed unmatched legacy theme {Path}", group.Id, path);
+                }
+                else
+                {
+                    _logger.LogInformation("[{Id}] Kept unmatched legacy theme {Path}", group.Id, path);
+                }
+            }
+        }
+
+        foreach (var item in affectedItems)
+        {
+            await item.RefreshMetadata(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static string GetLegacySourcePath(BaseItem group, MediaType mediaType, string filename)
+    {
+        var directory = mediaType == MediaType.Audio ? ThemeMusicDirectory : ThemeVideoDirectory;
+        return Path.Combine(group.ContainingFolderPath, directory, filename);
+    }
+
+    private bool TryMoveLegacyTheme(string sourcePath, string destinationPath, Guid groupId)
+    {
+        if (File.Exists(destinationPath))
+        {
+            _logger.LogWarning("[{Id}] Keeping legacy theme {Path} because destination {Destination} already exists", groupId, sourcePath, destinationPath);
+            return false;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+        try
+        {
+            File.Move(sourcePath, destinationPath);
+            _logger.LogInformation("[{Id}] Migrated legacy theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
+            return true;
+        }
+        catch (IOException)
+        {
+            try
+            {
+                File.Copy(sourcePath, destinationPath, false);
+                File.Delete(sourcePath);
+                _logger.LogInformation("[{Id}] Copied and removed legacy theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
+                return true;
+            }
+            catch (IOException exception)
+            {
+                _logger.LogWarning(exception, "[{Id}] Could not migrate legacy theme {Source} to {Destination}", groupId, sourcePath, destinationPath);
+                return false;
+            }
+        }
+    }
+
     private void LogUnrecoverableShokoGroupSources(BaseItem group, PluginConfiguration configuration)
     {
         if (TryGetAniDbId(group, configuration, out var rootId))
@@ -358,16 +497,7 @@ public class AnimeThemesDownloader : IDisposable
         CancellationToken cancellationToken = default)
     {
         var settings = type == MediaType.Audio ? configuration.AudioSettings : configuration.VideoSettings;
-
-        var distinctThemes = anime
-            .SelectMany(source => GetBestThemes(source, settings).Select(theme => new SourcedTheme(source, theme)))
-            .DistinctBy(theme => (theme.Anime.Id, theme.Theme.Theme.Id));
-
-        // Pick themes only after every group member has been aggregated.
-        var requiredThemes = PickThemes(settings.FetchType, distinctThemes);
-
-        // Turn them into downloadable links.
-        var links = ExtractLinks(type, requiredThemes, settings, useSourceUniqueFileNames).ToArray();
+        var links = GetThemeLinks(type, anime, settings, useSourceUniqueFileNames);
 
         // Before we start the download, make sure the folders are in a clean state.
         if (forceSync)
@@ -382,13 +512,28 @@ public class AnimeThemesDownloader : IDisposable
         }
 
         bool changesMade = false;
-        foreach (var (url, relativePath) in links)
+        foreach (var link in links)
         {
             // Download if needed.
-            changesMade |= await Download(type, url, item, relativePath, settings.Volume, cancellationToken).ConfigureAwait(false);
+            changesMade |= await Download(type, link.Url, item, link.Filepath, settings.Volume, cancellationToken).ConfigureAwait(false);
         }
 
         return changesMade;
+    }
+
+    private ThemeLink[] GetThemeLinks(
+        MediaType type,
+        IEnumerable<Anime> anime,
+        MediaTypeConfiguration settings,
+        bool useSourceUniqueFileNames)
+    {
+        var distinctThemes = anime
+            .SelectMany(source => GetBestThemes(source, settings).Select(theme => new SourcedTheme(source, theme)))
+            .DistinctBy(theme => (theme.Anime.Id, theme.Theme.Theme.Id));
+
+        // Pick themes only after every group member has been aggregated.
+        var requiredThemes = PickThemes(settings.FetchType, distinctThemes);
+        return ExtractLinks(type, requiredThemes, settings, useSourceUniqueFileNames).ToArray();
     }
 
     private IEnumerable<T> PickThemes<T>(FetchType fetchType, IEnumerable<T> themes)
@@ -406,24 +551,25 @@ public class AnimeThemesDownloader : IDisposable
         }
     }
 
-    private IEnumerable<(string Url, string Filepath)> ExtractLinks(
+    private IEnumerable<ThemeLink> ExtractLinks(
         MediaType type,
         IEnumerable<SourcedTheme> themes,
         MediaTypeConfiguration settings,
         bool useSourceUniqueFileNames)
     {
         bool isAudio = type == MediaType.Audio;
+        var extension = isAudio ? ".mp3" : ".webm";
+        var directory = isAudio ? ThemeMusicDirectory : ThemeVideoDirectory;
 
         foreach (var source in themes)
         {
             var url = isAudio ? source.Theme.Audio.Link : source.Theme.Video.Link;
             var sourceFilename = isAudio ? source.Theme.Audio.Filename : source.Theme.Video.Filename;
             var filename = useSourceUniqueFileNames ? $"{source.Anime.Id}__{sourceFilename}" : sourceFilename;
-            var path = isAudio
-                ? Path.Combine(ThemeMusicDirectory, $"{filename}__{settings.Volume * 100:0}.mp3")
-                : Path.Combine(ThemeVideoDirectory, $"{filename}__{settings.Volume * 100:0}.webm");
+            var legacyFilename = $"{sourceFilename}__{settings.Volume * 100:0}{extension}";
+            var filepath = Path.Combine(directory, $"{filename}__{settings.Volume * 100:0}{extension}");
 
-            yield return (url, path);
+            yield return new ThemeLink(url, filepath, legacyFilename);
         }
     }
 
@@ -673,4 +819,8 @@ public class AnimeThemesDownloader : IDisposable
     private sealed record GroupSource(Season Season, int AniDbId);
 
     private sealed record SourcedTheme(Anime Anime, FlattenedTheme Theme);
+
+    private sealed record ThemeLink(string Url, string Filepath, string LegacyFilename);
+
+    private sealed record LegacyThemeCandidate(ItemWithAnime Target, ThemeLink Link);
 }
