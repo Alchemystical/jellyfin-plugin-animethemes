@@ -37,6 +37,8 @@ public class PluginConfiguration : BasePluginConfiguration
             IgnoreEDs = false,
             Volume = 0.0,
         };
+        AudioShokoGroupPlacement = ShokoGroupPlacement.LegacyRootAniDb;
+        VideoShokoGroupPlacement = ShokoGroupPlacement.LegacyRootAniDb;
 
         MovieSettings = new CollectionTypeConfiguration();
     }
@@ -70,6 +72,16 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the video settings.
     /// </summary>
     public MediaTypeConfiguration VideoSettings { get; set; }
+
+    /// <summary>
+    /// Gets or sets where Shoko Group audio themes are written.
+    /// </summary>
+    public ShokoGroupPlacement AudioShokoGroupPlacement { get; set; }
+
+    /// <summary>
+    /// Gets or sets where Shoko Group video themes are written.
+    /// </summary>
+    public ShokoGroupPlacement VideoShokoGroupPlacement { get; set; }
 
     /// <summary>
     /// Gets or sets the download settings for the movie type.

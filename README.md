@@ -33,6 +33,7 @@ Also make sure to enable theme music / videos in your display settings.
 | Ignore OP themes                        | Use this to control whether OPs are considered.                                                           |
 | Ignore ED themes                        | Use this to control whether EDs are considered.                                                           |
 | Fetch type                              | Determines if you want all distinct themes, only the best match, or none at all.                          |
+| Shoko Group placement (audio/video)   | For Shoko Groups only. Legacy root AniDB keeps existing behavior; Per Season writes to each physical Season; Series Mix writes all recovered Season themes to the Series root. A group with no physical Season AniDB IDs (for example, an unrecoverable Season Merging layout) is skipped and logged. |
 | Volume                                  | The desired volume, which will be baked in. For videos, 0 will result in the audio channel being removed. |
 
 ## Other notes

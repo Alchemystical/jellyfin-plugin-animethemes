@@ -15,6 +15,7 @@ using Jellyfin.Plugin.AnimeThemes.Configuration;
 using Jellyfin.Plugin.AnimeThemes.Exceptions;
 using Jellyfin.Plugin.AnimeThemes.Models;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
@@ -59,63 +60,137 @@ public class AnimeThemesDownloader : IDisposable
     /// <returns>Whether item should be processed.</returns>
     public bool ShouldUpdate(BaseItem item, PluginConfiguration configuration)
     {
-        return TryGetAniDbId(item, configuration, out var id) && !IsSatisfied(item, configuration);
+        return (item.GetBaseItemKind() == BaseItemKind.Series || item.GetBaseItemKind() == BaseItemKind.Movie)
+            && TryGetAniDbId(item, configuration, out _)
+            && !IsSatisfied(item, configuration);
     }
 
     /// <summary>
-    /// Resolves a list of BaseItems to a list of BaseItems with their corresponding anime object.
+    /// Resolves a list of BaseItems to their download targets and corresponding anime objects.
     /// </summary>
     /// <param name="items">Chunk of items.</param>
+    /// <param name="seasonsBySeries">Physical Seasons belonging to Shoko Group Series.</param>
     /// <param name="configuration">Plugin configuration to do some pre-filtering.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A filtered list of items to be processed with their corresponding anime.</returns>
-    public async IAsyncEnumerable<ItemWithAnime> ResolveItems(BaseItem[] items, PluginConfiguration configuration, [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <returns>A filtered list of download targets with their corresponding anime.</returns>
+    public async IAsyncEnumerable<ItemWithAnime> ResolveItems(
+        BaseItem[] items,
+        ILookup<Guid, Season> seasonsBySeries,
+        PluginConfiguration configuration,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var itemsByAniDb = items.GroupBy(it =>
-        {
-            if (TryGetAniDbId(it, configuration, out var id))
-            {
-                return id;
-            }
-
-            return -1;
-        }).ToDictionary((it) => it.Key, (it) => it.ToList());
-
-        var animeByAniDb = await _api.FindByAniDbId(itemsByAniDb.Keys.Where(it => it != -1), cancellationToken).ConfigureAwait(false);
-
-        foreach (var entry in animeByAniDb)
+        var ids = new HashSet<int>();
+        foreach (var item in items)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (entry.Value.Length == 0)
+            if (!IsShokoGroup(item) || !RequiresShokoGroupProcessing(item, configuration))
+            {
+                AddAniDbId(item, configuration, ids);
+                continue;
+            }
+
+            if (UsesLegacyRootAniDb(configuration))
+            {
+                AddAniDbId(item, configuration, ids);
+            }
+
+            foreach (var season in seasonsBySeries[item.Id])
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                AddAniDbId(season, configuration, ids);
+            }
+        }
+
+        var animeByAniDb = await FindAnimeByAniDbId(ids, cancellationToken).ConfigureAwait(false);
+
+        var emittedLegacyIds = new HashSet<int>();
+
+        foreach (var item in items)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (IsShokoGroup(item) && RequiresShokoGroupProcessing(item, configuration))
+            {
+                foreach (var target in ResolveShokoGroup(item, seasonsBySeries[item.Id], animeByAniDb, configuration, cancellationToken))
+                {
+                    yield return target;
+                }
+
+                continue;
+            }
+
+            if (!TryGetAniDbId(item, configuration, out var id)
+                || !emittedLegacyIds.Add(id)
+                || !animeByAniDb.TryGetValue(id, out var anime)
+                || anime.Length == 0)
             {
                 continue;
             }
 
-            yield return new ItemWithAnime(itemsByAniDb[entry.Key].First(), new ReadOnlyCollection<Anime>(entry.Value));
+            yield return new ItemWithAnime(item, new ReadOnlyCollection<Anime>(anime));
         }
+    }
+
+    /// <summary>
+    /// Determines whether a Shoko Group must be resolved from its physical Seasons.
+    /// </summary>
+    /// <param name="item">Candidate library item.</param>
+    /// <param name="configuration">Plugin configuration.</param>
+    /// <returns>Whether the item requires Shoko Group member resolution.</returns>
+    public bool RequiresShokoGroupProcessing(BaseItem item, PluginConfiguration configuration)
+    {
+        return IsShokoGroup(item)
+            && ((configuration.AudioShokoGroupPlacement != ShokoGroupPlacement.LegacyRootAniDb
+                    && configuration.AudioSettings.FetchType != FetchType.None)
+                || (configuration.VideoShokoGroupPlacement != ShokoGroupPlacement.LegacyRootAniDb
+                    && configuration.VideoSettings.FetchType != FetchType.None));
     }
 
     /// <summary>
     /// Processes an item, downloading its theme if applicable.
     /// </summary>
-    /// <param name="item">The DB item to process.</param>
-    /// <param name="anime">The anime object belonging to the item.</param>
+    /// <param name="itemWithAnime">The DB item, target media type, and anime to process.</param>
     /// <param name="configuration">Configuration of the plugin.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Task that runts until item is done processing.</returns>
-    public async ValueTask HandleAsync(BaseItem item, Anime anime, PluginConfiguration configuration, CancellationToken cancellationToken)
+    /// <returns>Task that runs until the item is done processing.</returns>
+    public async ValueTask HandleAsync(ItemWithAnime itemWithAnime, PluginConfiguration configuration, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("[{Id}] Attempting to filter theme songs for: {Name} (AniDB={AniId})", item.Id, item.Name, anime.Id);
+        var item = itemWithAnime.Item;
+        _logger.LogInformation(
+            "[{Id}] Attempting to filter theme songs for: {Name} (AniDB={AniId})",
+            item.Id,
+            item.Name,
+            itemWithAnime.Anime.First().Id);
 
         bool isMovie = item.GetBaseItemKind() == BaseItemKind.Movie;
         var collectionTypeConfig = isMovie ? configuration.MovieSettings : new CollectionTypeConfiguration { AudioSettings = configuration.AudioSettings, VideoSettings = configuration.VideoSettings };
 
-        // Process videos
-        bool videoChanged = await ProcessMediaType(MediaType.Video, anime, item, configuration.ForceSync, collectionTypeConfig, cancellationToken).ConfigureAwait(false);
+        bool videoChanged = false;
+        bool audioChanged = false;
+        if (itemWithAnime.MediaType is null || itemWithAnime.MediaType == MediaType.Video)
+        {
+            videoChanged = await ProcessMediaType(
+                MediaType.Video,
+                itemWithAnime.Anime,
+                item,
+                configuration.ForceSync,
+                collectionTypeConfig,
+                itemWithAnime.UseSourceUniqueFileNames,
+                cancellationToken).ConfigureAwait(false);
+        }
 
-        // Process audios
-        bool audioChanged = await ProcessMediaType(MediaType.Audio, anime, item, configuration.ForceSync, collectionTypeConfig, cancellationToken).ConfigureAwait(false);
+        if (itemWithAnime.MediaType is null || itemWithAnime.MediaType == MediaType.Audio)
+        {
+            audioChanged = await ProcessMediaType(
+                MediaType.Audio,
+                itemWithAnime.Anime,
+                item,
+                configuration.ForceSync,
+                collectionTypeConfig,
+                itemWithAnime.UseSourceUniqueFileNames,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         if (videoChanged || audioChanged)
         {
@@ -128,17 +203,171 @@ public class AnimeThemesDownloader : IDisposable
         }
     }
 
-    private async ValueTask<bool> ProcessMediaType(MediaType type, Anime anime, BaseItem item, bool forceSync, CollectionTypeConfiguration configuration, CancellationToken cancellationToken = default)
+    private async ValueTask<Dictionary<int, Anime[]>> FindAnimeByAniDbId(IEnumerable<int> ids, CancellationToken cancellationToken)
+    {
+        var animeByAniDb = new Dictionary<int, Anime[]>();
+        foreach (var idsChunk in ids.Chunk(100))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await _api.FindByAniDbId(idsChunk, cancellationToken).ConfigureAwait(false);
+            foreach (var (id, anime) in result)
+            {
+                animeByAniDb.Add(id, anime);
+            }
+        }
+
+        return animeByAniDb;
+    }
+
+    private IEnumerable<ItemWithAnime> ResolveShokoGroup(
+        BaseItem group,
+        IEnumerable<Season> seasons,
+        IReadOnlyDictionary<int, Anime[]> animeByAniDb,
+        PluginConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var sources = seasons
+            .Where(season => !season.IsVirtualItem)
+            .Select(season => TryGetAniDbId(season, configuration, out var id) ? new GroupSource(season, id) : null)
+            .Where(source => source is not null)
+            .Select(source => source!)
+            .GroupBy(source => source.Season.Id)
+            .Select(source => source.First())
+            .OrderBy(source => source.Season.IndexNumber)
+            .ThenBy(source => source.Season.Id)
+            .ToArray();
+
+        if (sources.Length == 0)
+        {
+            LogUnrecoverableShokoGroupSources(group, configuration);
+        }
+
+        foreach (var target in ResolveShokoGroupMediaType(MediaType.Audio, group, sources, animeByAniDb, configuration, cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return target;
+        }
+
+        foreach (var target in ResolveShokoGroupMediaType(MediaType.Video, group, sources, animeByAniDb, configuration, cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return target;
+        }
+    }
+
+    private IEnumerable<ItemWithAnime> ResolveShokoGroupMediaType(
+        MediaType mediaType,
+        BaseItem group,
+        IReadOnlyCollection<GroupSource> sources,
+        IReadOnlyDictionary<int, Anime[]> animeByAniDb,
+        PluginConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var placement = mediaType == MediaType.Audio
+            ? configuration.AudioShokoGroupPlacement
+            : configuration.VideoShokoGroupPlacement;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (placement == ShokoGroupPlacement.LegacyRootAniDb)
+        {
+            if (TryGetAniDbId(group, configuration, out var rootId)
+                && animeByAniDb.TryGetValue(rootId, out var rootAnime)
+                && rootAnime.Length > 0)
+            {
+                yield return new ItemWithAnime(group, new ReadOnlyCollection<Anime>(rootAnime), mediaType);
+            }
+
+            yield break;
+        }
+
+        if (placement == ShokoGroupPlacement.PerSeason)
+        {
+            foreach (var source in sources)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (animeByAniDb.TryGetValue(source.AniDbId, out var seasonAnime) && seasonAnime.Length > 0)
+                {
+                    yield return new ItemWithAnime(source.Season, new ReadOnlyCollection<Anime>(seasonAnime), mediaType, true);
+                }
+            }
+
+            yield break;
+        }
+
+        if (placement == ShokoGroupPlacement.SeriesMix)
+        {
+            var mixedAnime = sources
+                .SelectMany(source => animeByAniDb.GetValueOrDefault(source.AniDbId) ?? [])
+                .DistinctBy(anime => anime.Id)
+                .ToArray();
+            if (mixedAnime.Length > 0)
+            {
+                yield return new ItemWithAnime(group, new ReadOnlyCollection<Anime>(mixedAnime), mediaType, true);
+            }
+
+            yield break;
+        }
+
+        throw new ArgumentOutOfRangeException(nameof(configuration), placement, "Unknown Shoko Group placement.");
+    }
+
+    private void LogUnrecoverableShokoGroupSources(BaseItem group, PluginConfiguration configuration)
+    {
+        if (TryGetAniDbId(group, configuration, out var rootId))
+        {
+            _logger.LogWarning(
+                "[{Id}] Shoko Group {Name} exposes root AniDB ID {AniDbId}, but no physical Season AniDB IDs; cannot recover member sources for the configured placement.",
+                group.Id,
+                group.Name,
+                rootId);
+            return;
+        }
+
+        _logger.LogWarning(
+            "[{Id}] Shoko Group {Name} has no physical Season AniDB IDs; cannot recover member sources for the configured placement.",
+            group.Id,
+            group.Name);
+    }
+
+    private static bool UsesLegacyRootAniDb(PluginConfiguration configuration)
+    {
+        return configuration.AudioShokoGroupPlacement == ShokoGroupPlacement.LegacyRootAniDb
+            || configuration.VideoShokoGroupPlacement == ShokoGroupPlacement.LegacyRootAniDb;
+    }
+
+    private static bool IsShokoGroup(BaseItem item)
+    {
+        return item.GetBaseItemKind() == BaseItemKind.Series
+            && item.TryGetProviderId("Shoko Group", out _);
+    }
+
+    private void AddAniDbId(BaseItem item, PluginConfiguration configuration, ISet<int> ids)
+    {
+        if (TryGetAniDbId(item, configuration, out var id))
+        {
+            ids.Add(id);
+        }
+    }
+
+    private async ValueTask<bool> ProcessMediaType(
+        MediaType type,
+        IEnumerable<Anime> anime,
+        BaseItem item,
+        bool forceSync,
+        CollectionTypeConfiguration configuration,
+        bool useSourceUniqueFileNames,
+        CancellationToken cancellationToken = default)
     {
         var settings = type == MediaType.Audio ? configuration.AudioSettings : configuration.VideoSettings;
 
-        var distinctThemes = GetBestThemes(anime, settings).DistinctBy(it => it.Theme.Id);
+        var distinctThemes = anime
+            .SelectMany(source => GetBestThemes(source, settings).Select(theme => new SourcedTheme(source, theme)))
+            .DistinctBy(theme => (theme.Anime.Id, theme.Theme.Theme.Id));
 
-        // Pick themes according to fetch type
+        // Pick themes only after every group member has been aggregated.
         var requiredThemes = PickThemes(settings.FetchType, distinctThemes);
 
-        // Turn them into downloadable links
-        var links = ExtractLinks(type, requiredThemes, settings).ToArray();
+        // Turn them into downloadable links.
+        var links = ExtractLinks(type, requiredThemes, settings, useSourceUniqueFileNames).ToArray();
 
         // Before we start the download, make sure the folders are in a clean state.
         if (forceSync)
@@ -155,14 +384,14 @@ public class AnimeThemesDownloader : IDisposable
         bool changesMade = false;
         foreach (var (url, relativePath) in links)
         {
-            // Download if needed
+            // Download if needed.
             changesMade |= await Download(type, url, item, relativePath, settings.Volume, cancellationToken).ConfigureAwait(false);
         }
 
         return changesMade;
     }
 
-    private IEnumerable<FlattenedTheme> PickThemes(FetchType fetchType, IEnumerable<FlattenedTheme> themes)
+    private IEnumerable<T> PickThemes<T>(FetchType fetchType, IEnumerable<T> themes)
     {
         switch (fetchType)
         {
@@ -177,18 +406,24 @@ public class AnimeThemesDownloader : IDisposable
         }
     }
 
-    private IEnumerable<(string Url, string Filepath)> ExtractLinks(MediaType type, IEnumerable<FlattenedTheme> themes, MediaTypeConfiguration settings)
+    private IEnumerable<(string Url, string Filepath)> ExtractLinks(
+        MediaType type,
+        IEnumerable<SourcedTheme> themes,
+        MediaTypeConfiguration settings,
+        bool useSourceUniqueFileNames)
     {
         bool isAudio = type == MediaType.Audio;
 
-        foreach (var theme in themes)
+        foreach (var source in themes)
         {
-            var link = isAudio ? theme.Audio.Link : theme.Video.Link;
+            var url = isAudio ? source.Theme.Audio.Link : source.Theme.Video.Link;
+            var sourceFilename = isAudio ? source.Theme.Audio.Filename : source.Theme.Video.Filename;
+            var filename = useSourceUniqueFileNames ? $"{source.Anime.Id}__{sourceFilename}" : sourceFilename;
             var path = isAudio
-                ? Path.Combine(ThemeMusicDirectory, $"{theme.Audio.Filename}__{settings.Volume * 100:0}.mp3")
-                : Path.Combine(ThemeVideoDirectory, $"{theme.Video.Filename}__{settings.Volume * 100:0}.webm");
+                ? Path.Combine(ThemeMusicDirectory, $"{filename}__{settings.Volume * 100:0}.mp3")
+                : Path.Combine(ThemeVideoDirectory, $"{filename}__{settings.Volume * 100:0}.webm");
 
-            yield return (link, path);
+            yield return (url, path);
         }
     }
 
@@ -327,15 +562,17 @@ public class AnimeThemesDownloader : IDisposable
     {
         id = -1;
 
-        // Ignore non-series and already processed ones.
-        if (item.GetBaseItemKind() != BaseItemKind.Series && item.GetBaseItemKind() != BaseItemKind.Movie)
+        // Themes are stored only for Series, Movies, and physical Shoko Group Seasons.
+        if (item.GetBaseItemKind() != BaseItemKind.Series
+            && item.GetBaseItemKind() != BaseItemKind.Movie
+            && item.GetBaseItemKind() != BaseItemKind.Season)
         {
             return false;
         }
 
-        if (item.TryGetProviderId("AniDB", out var idAsString))
+        if (item.TryGetProviderId("AniDB", out var idAsString)
+            && int.TryParse(idAsString, NumberStyles.None, CultureInfo.InvariantCulture, out id))
         {
-            id = int.Parse(idAsString, CultureInfo.InvariantCulture);
             return true;
         }
 
@@ -432,4 +669,8 @@ public class AnimeThemesDownloader : IDisposable
         Dispose(true);
         GC.SuppressFinalize(this);
     }
+
+    private sealed record GroupSource(Season Season, int AniDbId);
+
+    private sealed record SourcedTheme(Anime Anime, FlattenedTheme Theme);
 }

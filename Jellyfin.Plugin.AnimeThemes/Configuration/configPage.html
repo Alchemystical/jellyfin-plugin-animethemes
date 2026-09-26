@@ -82,6 +82,17 @@
                             </select>
                         </div>
 
+                        <div class="selectContainer at-shoko-group-placement">
+                            <label class="selectLabel" for="AudioShokoGroupPlacement">Shoko Group Placement</label>
+                            <select is="emby-select" id="AudioShokoGroupPlacement" name="AudioShokoGroupPlacement"
+                                    class="emby-select-withcolor emby-select">
+                                <option value="LegacyRootAniDb">Legacy: Series root AniDB</option>
+                                <option value="PerSeason">Each physical Season</option>
+                                <option value="SeriesMix">Mix all Seasons at Series root</option>
+                            </select>
+                            <div class="fieldDescription">For Shoko Groups only. Legacy keeps the existing root AniDB lookup.</div>
+                        </div>
+
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label">
                                 <input id="AudioIgnoreOverlapping" name="AudioIgnoreOverlapping" type="checkbox"
@@ -128,6 +139,17 @@
                                 <option value="Single">Single theme</option>
                                 <option value="All">All themes</option>
                             </select>
+                        </div>
+
+                        <div class="selectContainer at-shoko-group-placement">
+                            <label class="selectLabel" for="VideoShokoGroupPlacement">Shoko Group Placement</label>
+                            <select is="emby-select" id="VideoShokoGroupPlacement" name="VideoShokoGroupPlacement"
+                                    class="emby-select-withcolor emby-select">
+                                <option value="LegacyRootAniDb">Legacy: Series root AniDB</option>
+                                <option value="PerSeason">Each physical Season</option>
+                                <option value="SeriesMix">Mix all Seasons at Series root</option>
+                            </select>
+                            <div class="fieldDescription">For Shoko Groups only. Legacy keeps the existing root AniDB lookup.</div>
                         </div>
 
                         <div class="checkboxContainer checkboxContainer-withDescription">
@@ -205,6 +227,7 @@
 
                 // Write the new page.
                 writeConfigToHtml();
+                updateShokoGroupPlacementVisibility();
             }
 
             function selectSeries() {
@@ -214,6 +237,14 @@
                 seriesTitle.classList.add("selected");
 
                 writeConfigToHtml();
+                updateShokoGroupPlacementVisibility();
+            }
+
+            function updateShokoGroupPlacementVisibility() {
+                const display = seriesTitle.matches(".selected") ? "" : "none";
+                document.querySelectorAll('.at-shoko-group-placement').forEach(element => {
+                    element.style.display = display;
+                });
             }
 
             /**
@@ -242,6 +273,11 @@
                 target.VideoSettings.IgnoreEDs = document.querySelector('#VideoIgnoreEDs').checked;
                 target.VideoSettings.IgnoreOPs = document.querySelector('#VideoIgnoreOPs').checked;
                 target.VideoSettings.Volume = document.querySelector('#VideoVolume').value;
+
+                if (seriesTitle.matches(".selected")) {
+                    config.AudioShokoGroupPlacement = document.querySelector('#AudioShokoGroupPlacement').value;
+                    config.VideoShokoGroupPlacement = document.querySelector('#VideoShokoGroupPlacement').value;
+                }
             }
 
 
@@ -271,6 +307,11 @@
                 document.querySelector('#VideoIgnoreEDs').checked = target.VideoSettings.IgnoreEDs;
                 document.querySelector('#VideoIgnoreOPs').checked = target.VideoSettings.IgnoreOPs;
                 document.querySelector('#VideoVolume').value = target.VideoSettings.Volume;
+
+                document.querySelector('#AudioShokoGroupPlacement').value =
+                    config.AudioShokoGroupPlacement ?? 'LegacyRootAniDb';
+                document.querySelector('#VideoShokoGroupPlacement').value =
+                    config.VideoShokoGroupPlacement ?? 'LegacyRootAniDb';
             }
 
             document.querySelector('#AnimeThemesConfigPage')
@@ -279,6 +320,7 @@
 
                     config = await ApiClient.getPluginConfiguration(AnimeThemesConfig.pluginUniqueId);
                     writeConfigToHtml();
+                    updateShokoGroupPlacementVisibility();
 
                     Dashboard.hideLoadingMsg();
                 });

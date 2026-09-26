@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.AnimeThemes.Configuration;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 
@@ -64,33 +65,60 @@ public abstract class BaseThemeSearchTask
             applicable);
         // @formatter:on
 
-        // Get the anime objects in chunks
-        var itemsWithAnime = await items
-            .Where(it => _downloader.ShouldUpdate(it, configuration))
+        // Include legacy candidates and Shoko Groups that need member resolution.
+        var itemsToResolve = items
+            .Where(it => _downloader.ShouldUpdate(it, configuration) || _downloader.RequiresShokoGroupProcessing(it, configuration))
+            .ToArray();
+        var shokoGroupIds = itemsToResolve
+            .Where(it => _downloader.RequiresShokoGroupProcessing(it, configuration))
+            .Select(it => it.Id)
+            .ToArray();
+        var seasonsBySeries = shokoGroupIds.Length == 0
+            ? Enumerable.Empty<Season>().ToLookup(it => it.SeriesId)
+            : _libraryManager.GetItemList(
+                    new InternalItemsQuery
+                    {
+                        IncludeItemTypes = [BaseItemKind.Season],
+                        AncestorIds = shokoGroupIds,
+                        IsVirtualItem = false,
+                        IsMissing = false,
+                        Recursive = true,
+                    })
+                .OfType<Season>()
+                .ToLookup(it => it.SeriesId);
+
+        // Get the anime objects in chunks.
+        var itemsWithAnime = await itemsToResolve
             .Chunk(ChunkSize)
             .ToAsyncEnumerable()
-            .SelectMany((chunk) => _downloader.ResolveItems(chunk, configuration, cancellationToken))
+            .SelectMany((chunk) => _downloader.ResolveItems(chunk, seasonsBySeries, configuration, cancellationToken))
             .ToListAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var semaphore = new SemaphoreSlim(1, 1);
         int counter = 0;
         int count = items.Count;
 
-        // Process in parallel
-        await Parallel.ForEachAsync(itemsWithAnime, new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = configuration.DegreeOfParallelism }, async (item, ct) =>
-        {
-            await _downloader.HandleAsync(item.Item, item.Anime.First(), configuration, ct).ConfigureAwait(false);
-            await semaphore.WaitAsync(ct).ConfigureAwait(false);
-            try
+        // Process different target folders in parallel, but serialize plans for the same target.
+        await Parallel.ForEachAsync(
+            itemsWithAnime.GroupBy(item => item.Item.Id),
+            new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = configuration.DegreeOfParallelism },
+            async (targetPlans, ct) =>
             {
-                counter++;
-                progress.Report(counter / (double)count * 100);
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        }).ConfigureAwait(false);
+                foreach (var item in targetPlans)
+                {
+                    await _downloader.HandleAsync(item, configuration, ct).ConfigureAwait(false);
+                    await semaphore.WaitAsync(ct).ConfigureAwait(false);
+                    try
+                    {
+                        counter++;
+                        progress.Report(counter / (double)count * 100);
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                }
+            }).ConfigureAwait(false);
 
         _logger.LogInformation("Ending theme search ({Count})", count);
     }
