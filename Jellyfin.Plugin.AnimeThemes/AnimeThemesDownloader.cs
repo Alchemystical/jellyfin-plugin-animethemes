@@ -148,7 +148,7 @@ public class AnimeThemesDownloader : IDisposable
                 || (configuration.MigrateLegacyShokoGroupThemes
                     && (configuration.AudioSettings.FetchType != FetchType.None
                         || configuration.VideoSettings.FetchType != FetchType.None))
-                || configuration.CheckShokoRootThemeLinks);
+                || (configuration.LinkPerSeasonThemesFromShokoGroupRoot && configuration.CheckShokoRootThemeLinks));
     }
 
     /// <summary>
@@ -266,7 +266,7 @@ public class AnimeThemesDownloader : IDisposable
             LogUnrecoverableShokoGroupSources(group, configuration);
         }
 
-        if (configuration.CheckShokoRootThemeLinks)
+        if (configuration.LinkPerSeasonThemesFromShokoGroupRoot && configuration.CheckShokoRootThemeLinks)
         {
             bool rootThemeLinksChanged = false;
             if (configuration.AudioShokoGroupPlacement == ShokoGroupPlacement.PerSeason)
@@ -333,7 +333,12 @@ public class AnimeThemesDownloader : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 if (animeByAniDb.TryGetValue(source.AniDbId, out var seasonAnime) && seasonAnime.Length > 0)
                 {
-                    yield return new ItemWithAnime(source.Season, new ReadOnlyCollection<Anime>(seasonAnime), mediaType, true, group);
+                    yield return new ItemWithAnime(
+                        source.Season,
+                        new ReadOnlyCollection<Anime>(seasonAnime),
+                        mediaType,
+                        true,
+                        configuration.LinkPerSeasonThemesFromShokoGroupRoot ? group : null);
                 }
             }
 

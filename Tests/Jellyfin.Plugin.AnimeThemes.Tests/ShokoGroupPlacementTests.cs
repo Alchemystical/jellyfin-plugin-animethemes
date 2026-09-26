@@ -30,6 +30,7 @@ public sealed class ShokoGroupPlacementTests
         Assert.Equal(MatchedLegacyThemeAction.Move, configuration.MatchedLegacyShokoThemeAction);
         Assert.Equal(UnmatchedLegacyThemeAction.Delete, configuration.UnmatchedLegacyShokoThemeAction);
         Assert.False(configuration.CheckShokoRootThemeLinks);
+        Assert.False(configuration.LinkPerSeasonThemesFromShokoGroupRoot);
     }
 
     [Fact]
@@ -76,6 +77,22 @@ public sealed class ShokoGroupPlacementTests
         configuration.AudioSettings.FetchType = FetchType.None;
 
         Assert.False(downloader.RequiresShokoGroupProcessing(CreateShokoGroup(), configuration));
+    }
+
+    [Fact]
+    public void RootLinkCheckOnlyEnablesMemberProcessingWhenRootLinksAreEnabled()
+    {
+        using var downloader = CreateDownloader();
+        var configuration = new PluginConfiguration
+        {
+            CheckShokoRootThemeLinks = true,
+        };
+
+        Assert.False(downloader.RequiresShokoGroupProcessing(CreateShokoGroup(), configuration));
+
+        configuration.LinkPerSeasonThemesFromShokoGroupRoot = true;
+
+        Assert.True(downloader.RequiresShokoGroupProcessing(CreateShokoGroup(), configuration));
     }
 
     private static AnimeThemesDownloader CreateDownloader()

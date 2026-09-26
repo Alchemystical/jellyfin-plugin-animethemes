@@ -200,6 +200,14 @@
                         </div>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label">
+                                <input id="LinkPerSeasonThemesFromShokoGroupRoot" name="LinkPerSeasonThemesFromShokoGroupRoot" type="checkbox"
+                                       is="emby-checkbox"/>
+                                <span>Expose PerSeason themes on the Shoko Group root</span>
+                            </label>
+                            <div class="fieldDescription">Creates symbolic links in the Group root so clients can play Season themes from the Series page. Disabled by default.</div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
                                 <input id="CheckShokoRootThemeLinks" name="CheckShokoRootThemeLinks" type="checkbox"
                                        is="emby-checkbox"/>
                                 <span>Check root theme symlinks during the next scan</span>
@@ -317,6 +325,8 @@
                     config.MatchedLegacyShokoThemeAction = document.querySelector('#MatchedLegacyShokoThemeAction').value;
                     config.UnmatchedLegacyShokoThemeAction = document.querySelector('#UnmatchedLegacyShokoThemeAction').value;
                     config.CheckShokoRootThemeLinks = document.querySelector('#CheckShokoRootThemeLinks').checked;
+                    config.LinkPerSeasonThemesFromShokoGroupRoot =
+                        document.querySelector('#LinkPerSeasonThemesFromShokoGroupRoot').checked;
                 }
             }
 
@@ -360,6 +370,8 @@
                     config.UnmatchedLegacyShokoThemeAction ?? 'Delete';
                 document.querySelector('#CheckShokoRootThemeLinks').checked =
                     config.CheckShokoRootThemeLinks ?? false;
+                document.querySelector('#LinkPerSeasonThemesFromShokoGroupRoot').checked =
+                    config.LinkPerSeasonThemesFromShokoGroupRoot ?? false;
             }
 
             document.querySelector('#AnimeThemesConfigPage')

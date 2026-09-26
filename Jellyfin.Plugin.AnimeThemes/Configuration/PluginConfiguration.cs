@@ -43,6 +43,7 @@ public class PluginConfiguration : BasePluginConfiguration
         MatchedLegacyShokoThemeAction = MatchedLegacyThemeAction.Move;
         UnmatchedLegacyShokoThemeAction = UnmatchedLegacyThemeAction.Delete;
         CheckShokoRootThemeLinks = false;
+        LinkPerSeasonThemesFromShokoGroupRoot = false;
 
         MovieSettings = new CollectionTypeConfiguration();
     }
@@ -106,6 +107,11 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets a value indicating whether the next scan reconciles PerSeason themes linked into Shoko Group roots.
     /// </summary>
     public bool CheckShokoRootThemeLinks { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether PerSeason themes are linked from their Shoko Group root.
+    /// </summary>
+    public bool LinkPerSeasonThemesFromShokoGroupRoot { get; set; }
 
     /// <summary>
     /// Gets or sets the download settings for the movie type.
